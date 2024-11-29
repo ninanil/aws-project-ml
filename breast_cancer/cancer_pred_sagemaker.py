@@ -1,1 +1,126 @@
-{"metadata":{"kernelspec":{"language":"python","display_name":"Python 3","name":"python3"},"language_info":{"pygments_lexer":"ipython3","nbconvert_exporter":"python","version":"3.6.4","file_extension":".py","codemirror_mode":{"name":"ipython","version":3},"name":"python","mimetype":"text/x-python"},"kaggle":{"accelerator":"none","dataSources":[],"isInternetEnabled":true,"language":"python","sourceType":"script","isGpuEnabled":false}},"nbformat_minor":4,"nbformat":4,"cells":[{"cell_type":"code","source":"# Import necessary libraries\nimport pandas as pd  # For data manipulation\nfrom sklearn.datasets import load_breast_cancer\nfrom sklearn.model_selection import train_test_split\nimport boto3\nimport sagemaker\nfrom sagemaker import get_execution_role\nfrom sagemaker.image_uris import retrieve  # Updated for retrieving container images\n\n# Initialize SageMaker session and role\nsagemaker_session = sagemaker.Session()\nrole = get_execution_role()\n\n# Define S3 bucket name (ensure this bucket exists and you have access)\nbucket_name = 'sagemaker-build-and-deploy-model-sagemaker'\n\n# Define S3 output location for the model artifacts\ns3_output_location = f's3://{bucket_name}/output/'\n\n# Load the breast cancer dataset\ndata = load_breast_cancer()\nX, y = data.data, data.target\n\n# Convert to pandas DataFrame for easier manipulation\ndf = pd.DataFrame(X, columns=data.feature_names)\ndf['target'] = y\n\n# Split the data into training and testing sets\nX_train, X_test, y_train, y_test = train_test_split(\n    X, y, test_size=0.2, random_state=42\n)\n\n# Create DataFrames for training and testing\ntrain_data = pd.DataFrame(X_train, columns=data.feature_names)\ntrain_data['target'] = y_train\n\ntest_data = pd.DataFrame(X_test, columns=data.feature_names)\ntest_data['target'] = y_test\n\n# Save training data to CSV\ntrain_csv_path = 'train_data.csv'\ntrain_data.to_csv(train_csv_path, header=False, index=False)\n\n# Save testing data to CSV\ntest_csv_path = 'test_data.csv'\ntest_data.to_csv(test_csv_path, header=False, index=False)\n\n# Initialize Boto3 S3 resource\ns3 = boto3.resource('s3')\n\n# Upload training data to S3\ntrain_key = 'data/train/train_data.csv'\ns3.Bucket(bucket_name).Object(train_key).upload_file(train_csv_path)\nprint(f\"Training data uploaded to s3://{bucket_name}/{train_key}\")\n\n# Upload testing data to S3\ntest_key = 'data/test/test_data.csv'\ns3.Bucket(bucket_name).Object(test_key).upload_file(test_csv_path)\nprint(f\"Testing data uploaded to s3://{bucket_name}/{test_key}\")\n\n# Retrieve the XGBoost container image URI\nxgboost_image = retrieve(\n    framework='xgboost',\n    region=boto3.Session().region_name,\n    version='1.5-1'  # Specify the XGBoost version as needed\n)\n\n# Create an XGBoost Estimator\nxgb_estimator = sagemaker.estimator.Estimator(\n    image_uri=xgboost_image,\n    role=role,\n    instance_count=1,\n    instance_type='ml.m4.xlarge',\n    volume_size=5,  # in GB\n    output_path=s3_output_location,\n    sagemaker_session=sagemaker_session\n)\n\n# Set hyperparameters for binary classification\nxgb_estimator.set_hyperparameters(\n    max_depth=5,\n    eta=0.2,\n    gamma=4,\n    min_child_weight=6,\n    objective='binary:logistic',  # Binary classification objective\n    num_round=50,\n    verbosity=1  # Changed from 'silent' to 'verbosity' for newer XGBoost versions\n)\n\n# Define S3 paths for training and testing data\ntrain_s3_path = f's3://{bucket_name}/data/train/'\ntest_s3_path = f's3://{bucket_name}/data/test/'\n\n# Define data channels using SageMaker's TrainingInput\nfrom sagemaker.inputs import TrainingInput\n\ntrain_input = TrainingInput(\n    s3_data=train_s3_path,\n    content_type='csv'\n)\n\ntest_input = TrainingInput(\n    s3_data=test_s3_path,\n    content_type='csv'\n)\n\ndata_channels = {\n    'train': train_input,\n    'test': test_input  \n\n# Train the model\nprint(\"Starting model training...\")\nxgb_estimator.fit(inputs=data_channels)\nprint(\"Model training completed.\")\n\n# Deploy the trained model to an endpoint\nprint(\"Deploying the model...\")\nxgb_predictor = xgb_estimator.deploy(\n    initial_instance_count=1,\n    instance_type='ml.m4.xlarge'\n)\nprint(\"Model deployed.\")\n\n# Save the endpoint name for future use\nendpoint_name = xgb_predictor.endpoint_name\nprint(f\"Endpoint name: {endpoint_name}\")\n","metadata":{"_uuid":"13e09de6-49aa-4404-a85c-07ac3f1aee06","_cell_guid":"922f5680-8a52-461a-8e5f-7fb527cc7d09","trusted":true,"collapsed":false,"jupyter":{"outputs_hidden":false}},"outputs":[],"execution_count":null}]}
+# Import necessary libraries
+import pandas as pd  # For data manipulation
+from sklearn.datasets import load_breast_cancer
+from sklearn.model_selection import train_test_split
+import boto3
+import sagemaker
+from sagemaker import get_execution_role
+from sagemaker.image_uris import retrieve  # Updated for retrieving container images
+
+# Initialize SageMaker session and role
+sagemaker_session = sagemaker.Session()
+role = get_execution_role()
+
+# Define S3 bucket name (ensure this bucket exists and you have access)
+bucket_name = 'sagemaker-build-and-deploy-model-sagemaker'
+
+# Define S3 output location for the model artifacts
+s3_output_location = f's3://{bucket_name}/output/'
+
+# Load the breast cancer dataset
+data = load_breast_cancer()
+X, y = data.data, data.target
+
+# Convert to pandas DataFrame for easier manipulation
+df = pd.DataFrame(X, columns=data.feature_names)
+df['target'] = y
+
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
+)
+
+# Create DataFrames for training and testing
+train_data = pd.DataFrame(X_train, columns=data.feature_names)
+train_data['target'] = y_train
+
+test_data = pd.DataFrame(X_test, columns=data.feature_names)
+test_data['target'] = y_test
+
+# Save training data to CSV
+train_csv_path = 'train_data.csv'
+train_data.to_csv(train_csv_path, header=False, index=False)
+
+# Save testing data to CSV
+test_csv_path = 'test_data.csv'
+test_data.to_csv(test_csv_path, header=False, index=False)
+
+# Initialize Boto3 S3 resource
+s3 = boto3.resource('s3')
+
+# Upload training data to S3
+train_key = 'data/train/train_data.csv'
+s3.Bucket(bucket_name).Object(train_key).upload_file(train_csv_path)
+print(f"Training data uploaded to s3://{bucket_name}/{train_key}")
+
+# Upload testing data to S3
+test_key = 'data/test/test_data.csv'
+s3.Bucket(bucket_name).Object(test_key).upload_file(test_csv_path)
+print(f"Testing data uploaded to s3://{bucket_name}/{test_key}")
+
+# Retrieve the XGBoost container image URI
+xgboost_image = retrieve(
+    framework='xgboost',
+    region=boto3.Session().region_name,
+    version='1.5-1'  # Specify the XGBoost version as needed
+)
+
+# Create an XGBoost Estimator
+xgb_estimator = sagemaker.estimator.Estimator(
+    image_uri=xgboost_image,
+    role=role,
+    instance_count=1,
+    instance_type='ml.m4.xlarge',
+    volume_size=5,  # in GB
+    output_path=s3_output_location,
+    sagemaker_session=sagemaker_session
+)
+
+# Set hyperparameters for binary classification
+xgb_estimator.set_hyperparameters(
+    max_depth=5,
+    eta=0.2,
+    gamma=4,
+    min_child_weight=6,
+    objective='binary:logistic',  # Binary classification objective
+    num_round=50,
+    verbosity=1  # Changed from 'silent' to 'verbosity' for newer XGBoost versions
+)
+
+# Define S3 paths for training and testing data
+train_s3_path = f's3://{bucket_name}/data/train/'
+test_s3_path = f's3://{bucket_name}/data/test/'
+
+# Define data channels using SageMaker's TrainingInput
+from sagemaker.inputs import TrainingInput
+
+train_input = TrainingInput(
+    s3_data=train_s3_path,
+    content_type='csv'
+)
+
+test_input = TrainingInput(
+    s3_data=test_s3_path,
+    content_type='csv'
+)
+
+data_channels = {
+    'train': train_input,
+    'test': test_input  
+
+# Train the model
+print("Starting model training...")
+xgb_estimator.fit(inputs=data_channels)
+print("Model training completed.")
+
+# Deploy the trained model to an endpoint
+print("Deploying the model...")
+xgb_predictor = xgb_estimator.deploy(
+    initial_instance_count=1,
+    instance_type='ml.m4.xlarge'
+)
+print("Model deployed.")
+
+# Save the endpoint name for future use
+endpoint_name = xgb_predictor.endpoint_name
+print(f"Endpoint name: {endpoint_name}")
